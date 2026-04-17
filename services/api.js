@@ -1,6 +1,9 @@
 import axios from 'axios';
 
-const API_URL = 'http://10.56.63.66:5001';  // ← your Mac IP from Flask output (change if different)
+import Constants from "expo-constants";
+
+const API_URL =
+  Constants.expoConfig?.extra?.apiBaseUrl || "http://localhost:5001"; // ← your Mac IP from Flask output (change if different)
 
 export const getLots = async () => {
   try {
