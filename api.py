@@ -68,6 +68,16 @@ def build_lots_by_campus():
 
 lots_by_campus = build_lots_by_campus()
 
+user_points = {}
+VIEW_COST = 1
+REPORT_REWARD = 5
+STARTING_POINTS = 0
+
+def get_points(reporter):
+    if reporter not in user_points:
+        user_points[reporter] = STARTING_POINTS
+    return user_points[reporter]
+
 
 def get_or_create_campus(campus_name):
     """
@@ -110,17 +120,8 @@ def get_campuses():
 
 @app.route('/lots', methods=['GET'])
 def get_lots():
-    """
-    Get lots for a specific campus.
-
-    Example:
-        GET /lots?campus=SDSU
-
-    Backward compatibility:
-        If no campus is provided, default to SDSU so the current frontend
-        still works.
-    """
     campus_name = request.args.get('campus', 'SDSU')
+    reporter = request.args.get('reporter', 'anonymous')
 
     if campus_name not in lots_by_campus:
         return jsonify({
@@ -128,9 +129,24 @@ def get_lots():
             "error": f"Campus '{campus_name}' not found"
         }), 404
 
+    points = get_points(reporter)
+
+    if points < VIEW_COST:
+        return jsonify({
+            "success": False,
+            "error": "Not enough points. Submit a report to view parking data.",
+            "points": points
+        }), 403
+
+    user_points[reporter] -= VIEW_COST
+
     campus_lots = lots_by_campus[campus_name]
 
-    return jsonify([lot.to_dict() for lot in campus_lots.values()])
+    return jsonify({
+        "success": True,
+        "points": user_points[reporter],
+        "lots": [lot.to_dict() for lot in campus_lots.values()]
+    })
 
 
 @app.route('/report', methods=['POST'])
@@ -166,12 +182,15 @@ def submit_report():
         lot = get_or_create_lot(campus_name, lot_name)
         report = Report(lot, status, reporter)
         lot.add_report(report)
+        get_points(reporter)
+        user_points[reporter] += REPORT_REWARD
 
         return jsonify({
             "success": True,
             "campus": campus_name,
+            "points": user_points[reporter],
             "lot": lot.to_dict()
-        })
+        })  
     except ValueError as e:
         return jsonify({
             "success": False,
