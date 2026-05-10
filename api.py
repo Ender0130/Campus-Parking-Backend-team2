@@ -7,20 +7,37 @@ app = Flask(__name__)
 CORS(app)
 
 # -------------------------------------------------------------------
+# In-memory user store — replace with a database later
+# -------------------------------------------------------------------
+users = {}  # { username: password }
+
+@app.route('/register', methods=['POST'])
+def register():
+    data = request.get_json() or {}
+    username = data.get('username', '').strip()
+    password = data.get('password', '').strip()
+
+    if not username or not password:
+        return jsonify({"success": False, "error": "Username and password required"}), 400
+    if username in users:
+        return jsonify({"success": False, "error": "Username already taken"}), 409
+
+    users[username] = password
+    return jsonify({"success": True, "username": username})
+
+@app.route('/login', methods=['POST'])
+def login():
+    data = request.get_json() or {}
+    username = data.get('username', '').strip()
+    password = data.get('password', '').strip()
+
+    if users.get(username) == password:
+        return jsonify({"success": True, "username": username})
+    return jsonify({"success": False, "error": "Invalid username or password"}), 401
+
+# -------------------------------------------------------------------
 # Multi-campus data setup
 # -------------------------------------------------------------------
-# Instead of one flat "lots" dictionary, store lots by campus:
-# {
-#   "SDSU": {
-#       "Parking Lot 1": ParkingLot(...),
-#       ...
-#   },
-#   "UCSD": {
-#       "Gilman Parking Structure": ParkingLot(...),
-#       ...
-#   }
-# }
-
 CAMPUS_LOT_CONFIG = {
     "SDSU": [
         {"name": "Parking Lot 1", "total_spots": 100},
@@ -80,19 +97,12 @@ def get_points(reporter):
 
 
 def get_or_create_campus(campus_name):
-    """
-    Ensure the campus exists in the in-memory store.
-    """
     if campus_name not in lots_by_campus:
         lots_by_campus[campus_name] = {}
     return lots_by_campus[campus_name]
 
 
 def get_or_create_lot(campus_name, lot_name):
-    """
-    Ensure a lot exists inside the chosen campus.
-    If it does not exist, create it with default values.
-    """
     campus_lots = get_or_create_campus(campus_name)
 
     if lot_name not in campus_lots:
@@ -111,10 +121,6 @@ def get_or_create_lot(campus_name, lot_name):
 
 @app.route('/campuses', methods=['GET'])
 def get_campuses():
-    """
-    Return a list of supported campuses.
-    This helps the frontend populate a campus dropdown dynamically.
-    """
     return jsonify(sorted(list(lots_by_campus.keys())))
 
 
@@ -147,24 +153,11 @@ def get_lots():
         "points": user_points[reporter],
         "lots": [lot.to_dict() for lot in campus_lots.values()]
     })
+    return jsonify([lot.to_dict() for lot in campus_lots.values()])
 
 
 @app.route('/report', methods=['POST'])
 def submit_report():
-    """
-    Submit a report for a lot inside a specific campus.
-
-    Expected JSON:
-    {
-        "campus": "SDSU",
-        "lot_name": "Parking Lot 1",
-        "status": "FULL",
-        "reporter": "student123"
-    }
-
-    Backward compatibility:
-        If campus is missing, default to SDSU.
-    """
     data = request.get_json() or {}
 
     campus_name = data.get('campus', 'SDSU')
@@ -200,11 +193,6 @@ def submit_report():
 
 @app.route('/debug/all-lots', methods=['GET'])
 def get_all_lots():
-    """
-    Optional debug route:
-    returns every campus and all of its lots.
-    Useful for testing multi-campus storage.
-    """
     return jsonify({
         campus_name: [lot.to_dict() for lot in campus_lots.values()]
         for campus_name, campus_lots in lots_by_campus.items()
