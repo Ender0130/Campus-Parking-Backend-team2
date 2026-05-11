@@ -315,8 +315,12 @@ def build_lots_by_campus():
 lots_by_campus = build_lots_by_campus()
 
 user_points = {}
-VIEW_COST = 1
+# Tracks the last accepted report per user/lot so users cannot farm points by
+# repeatedly submitting the same parking report.
+user_report_cooldowns = {}
+MIN_POINTS_TO_VIEW = 1
 REPORT_REWARD = 5
+REPORT_COOLDOWN_SECONDS = 10 * 60
 STARTING_POINTS = 0
 
 
@@ -324,6 +328,27 @@ def get_points(reporter):
     if reporter not in user_points:
         user_points[reporter] = STARTING_POINTS
     return user_points[reporter]
+
+
+def get_report_cooldown_key(reporter, campus_name, lot_name):
+    return (reporter, campus_name.strip().upper(), lot_name.strip().lower())
+
+
+def get_report_cooldown_remaining_seconds(reporter, campus_name, lot_name):
+    last_report_at = user_report_cooldowns.get(
+        get_report_cooldown_key(reporter, campus_name, lot_name)
+    )
+
+    if not last_report_at:
+        return 0
+
+    elapsed = time.time() - last_report_at
+    remaining = REPORT_COOLDOWN_SECONDS - elapsed
+    return max(0, int(remaining + 0.999))
+
+
+def remember_report_time(reporter, campus_name, lot_name):
+    user_report_cooldowns[get_report_cooldown_key(reporter, campus_name, lot_name)] = time.time()
 
 
 def get_or_create_campus(campus_name):
@@ -403,25 +428,24 @@ def get_lots():
 
     points = get_points(reporter)
 
-    if points < VIEW_COST:
+    if points < MIN_POINTS_TO_VIEW:
         return (
             jsonify(
                 {
                     "success": False,
-                    "error": "Not enough points. Submit a report to view parking data.",
+                    "error": "Not enough points. Submit a report to unlock parking data.",
                     "points": points,
                 }
             ),
             403,
         )
 
-    user_points[reporter] -= VIEW_COST
     campus_lots = lots_by_campus[campus_name]
 
     return jsonify(
         {
             "success": True,
-            "points": user_points[reporter],
+            "points": points,
             "lots": [lot.to_dict() for lot in campus_lots.values()],
         }
     )
@@ -452,9 +476,27 @@ def submit_report():
         )
 
     try:
+        cooldown_remaining = get_report_cooldown_remaining_seconds(
+            reporter, campus_name, lot_name
+        )
+        if cooldown_remaining > 0:
+            minutes = max(1, int((cooldown_remaining + 59) / 60))
+            return (
+                jsonify(
+                    {
+                        "success": False,
+                        "error": f"You reported this lot too recently. Try again in about {minutes} minute(s).",
+                        "points": get_points(reporter),
+                        "retry_after_seconds": cooldown_remaining,
+                    }
+                ),
+                429,
+            )
+
         lot = get_or_create_lot(campus_name, lot_name)
         report = Report(lot, status, reporter)
         lot.add_report(report)
+        remember_report_time(reporter, campus_name, lot_name)
         get_points(reporter)
         user_points[reporter] += REPORT_REWARD
 
@@ -467,14 +509,16 @@ def submit_report():
             }
         )
     except ValueError as exc:
+        status_code = 429 if "too recently" in str(exc).lower() else 400
         return (
             jsonify(
                 {
                     "success": False,
                     "error": str(exc),
+                    "points": get_points(reporter),
                 }
             ),
-            400,
+            status_code,
         )
 
 
